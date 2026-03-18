@@ -1033,7 +1033,37 @@ body.light-theme .mode-panel-option:hover {
     .file-action-card.generation-pending {
       border-left-color: var(--warning-color); opacity: 0.8; animation: pulse 1.5s infinite;
     }
-    
+/* === 文件预览卡片 === */
+.chat-container .file-preview-card { 
+  max-width: 360px !important;
+  width: fit-content !important;
+  min-width: 280px !important;
+  background: linear-gradient(
+    135deg,
+    rgba(21, 56, 214, 0.3) 0%,
+    rgba(255, 255, 255, 0.25) 100%
+  ) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 0.5px solid rgba(255, 255, 255, 0.3) !important; 
+  border-radius: 16px !important; 
+  padding: 16px !important; 
+  margin: 12px 0 !important; 
+  box-shadow: 0 8px 10px rgba(31, 38, 135, 0.37) !important;
+  transform: rotate(-0.3deg) !important;
+  align-self: flex-start !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .chat-container .file-preview-card { 
+    background: linear-gradient(
+      135deg,
+      rgba(61, 2, 6, 0.829) 0%,
+      rgba(185, 180, 185, 0.7) 100%
+    ) !important;
+    border: 0.5px solid rgba(255, 255, 255, 0.1) !important;
+  }
+}
+
     @keyframes slideIn {
       from { transform: translateX(-10px); opacity: 0; }
       to { transform: translateX(10px); opacity: 1; }
