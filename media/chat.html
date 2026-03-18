@@ -3031,21 +3031,34 @@ function initMessageRenderer() {
     }
 
     function addCompilationCard(success, message, filePath, executablePath, language) {
-        const div = document.createElement('div');
-        div.className = 'compilation-card ' + (success ? 'success' : 'error');
+    const div = document.createElement('div');
+    div.className = 'compilation-card ' + (success ? 'success' : 'error');
+    
+    // 检查消息是否已经包含编译状态
+    let hasStatus = message.includes('编译成功') || message.includes('编译失败');
+    
+    // 构建HTML
+    let html = '';
+    
+    // 只添加一次标题
+    if (!hasStatus) {
+        html += '<div class="comp-header">' + (success ? '✅ 编译成功' : '❌ 编译失败') + '</div>';
+    }
+    
+    // 使用 Marked 解析编译输出
+    let formattedMsg = "";
+    try {
+         if (!window.markedConfigured) { configureMarked(); }
+         formattedMsg = marked.parse(message);
+    } catch(e) {
+         formattedMsg = escapeHtml(message).replace(/\n/g, '<br>');
+    }
         
-        let html = '<div class="comp-header">' + (success ? '✅ 编译成功' : '❌ 编译失败') + '</div>';
-        
-        // 使用 Marked 解析编译输出
-        let formattedMsg = "";
-        try {
-             if (!window.markedConfigured) { configureMarked(); }
-             formattedMsg = marked.parse(message);
-        } catch(e) {
-             formattedMsg = escapeHtml(message).replace(/\n/g, '<br>');
-        }
-            
-        html += '<div class="comp-details">' + formattedMsg + '</div>';
+    // 移除消息中可能重复的状态信息
+    formattedMsg = formattedMsg.replace(/❌ \*\*编译失败\*\*/g, '');
+    formattedMsg = formattedMsg.replace(/✅ \*\*编译成功！\*\*/g, '');
+    
+    html += '<div class="comp-details">' + formattedMsg + '</div>';
         
         if (success) {
             html += '<div class="comp-actions">';
