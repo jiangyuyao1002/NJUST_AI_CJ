@@ -1731,9 +1731,11 @@ let history = [];
 let currentMode = 'chat';
 let attachedFiles = [];
 let isGenerating = false;
+let isAgentPaused = false;
 let isWebSearchEnabled = false;
 let activeSettingsTab = 'online';
 let userHasScrolledUp = false;
+let isProgrammaticScroll = false;
 let chatTypingEffect = true;
 let taskProgressEl = null;
 const modifiedFiles = new Set();
@@ -2022,9 +2024,13 @@ class MessageRenderer {
       }
     }
 
-    // 流式渲染中用即时滚动，避免 smooth 动画每帧重启导致跳动
+    // 流式渲染：延迟到下一帧读取 scrollHeight，确保 DOM reflow 完成后再滚动
     if (typeof userHasScrolledUp !== 'undefined' && !userHasScrolledUp) {
-      chatContainer.scrollTop = chatContainer.scrollHeight;
+      requestAnimationFrame(() => {
+        isProgrammaticScroll = true;
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        isProgrammaticScroll = false;
+      });
     }
   }
 
@@ -2154,6 +2160,7 @@ function initMessageRenderer() {
 
       // 检测用户是否主动上滑（距离底部超过 80px 视为上滑）
       chatContainer.addEventListener('scroll', () => {
+        if (isProgrammaticScroll) { return; }
         const threshold = 80;
         userHasScrolledUp = (chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight) > threshold;
       });
@@ -2445,7 +2452,7 @@ function initMessageRenderer() {
 
     function updateModifyDecisionBar() {
       if (!modifyDecisionBar) return;
-      const visible = modifiedFiles.size > 0 && !isGenerating;
+      const visible = modifiedFiles.size > 0 && !isGenerating && !isAgentPaused;
       modifyDecisionBar.style.display = visible ? 'flex' : 'none';
       if (visible) modifyDecisionBar.classList.add('visible');
       else modifyDecisionBar.classList.remove('visible');
@@ -2828,7 +2835,7 @@ function initMessageRenderer() {
           sysDiv.className = 'system-message';
           sysDiv.textContent = text;
           chatContainer.appendChild(sysDiv);
-          if (!userHasScrolledUp) { chatContainer.scrollTop = chatContainer.scrollHeight; }
+          if (!userHasScrolledUp) { isProgrammaticScroll = true; chatContainer.scrollTop = chatContainer.scrollHeight; isProgrammaticScroll = false; }
           return;
         }
 
@@ -2841,7 +2848,7 @@ function initMessageRenderer() {
           list.appendChild(item);
           const count = list.children.length;
           lastChild.querySelector('.steps-summary-text').textContent = `Agent 执行步骤 (${count})`;
-          if (!userHasScrolledUp) { chatContainer.scrollTop = chatContainer.scrollHeight; }
+          if (!userHasScrolledUp) { isProgrammaticScroll = true; chatContainer.scrollTop = chatContainer.scrollHeight; isProgrammaticScroll = false; }
           return;
         }
 
@@ -2876,7 +2883,7 @@ function initMessageRenderer() {
           summary.querySelector('.steps-summary-text').textContent = `Agent 执行步骤 (${list.children.length})`;
           group.appendChild(list);
           chatContainer.appendChild(group);
-          if (!userHasScrolledUp) { chatContainer.scrollTop = chatContainer.scrollHeight; }
+          if (!userHasScrolledUp) { isProgrammaticScroll = true; chatContainer.scrollTop = chatContainer.scrollHeight; isProgrammaticScroll = false; }
           return;
         }
 
@@ -2885,7 +2892,7 @@ function initMessageRenderer() {
         sysDiv.className = 'system-message';
         sysDiv.textContent = text;
         chatContainer.appendChild(sysDiv);
-        if (!userHasScrolledUp) { chatContainer.scrollTop = chatContainer.scrollHeight; }
+        if (!userHasScrolledUp) { isProgrammaticScroll = true; chatContainer.scrollTop = chatContainer.scrollHeight; isProgrammaticScroll = false; }
     }
 
     function clearTaskProgress() {
@@ -2906,7 +2913,7 @@ function initMessageRenderer() {
         const text = taskProgressEl.querySelector('.task-progress-text');
         if (fill) fill.style.width = (progress || 0) + '%';
         if (text) text.textContent = '步骤 ' + (currentStep || 0) + '/' + (totalSteps || 0);
-        if (!userHasScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
+        if (!userHasScrolledUp) { isProgrammaticScroll = true; chatContainer.scrollTop = chatContainer.scrollHeight; isProgrammaticScroll = false; }
     }
 
     // 将 ANSI 转义序列解析为 HTML（支持常见颜色）
@@ -3451,7 +3458,15 @@ function initMessageRenderer() {
 
     function smartScroll() {
       if (!userHasScrolledUp) {
+        isProgrammaticScroll = true;
         chatContainer.scrollTo({ top: chatContainer.scrollHeight, behavior: 'smooth' });
+        const onScrollEnd = () => {
+          isProgrammaticScroll = false;
+          chatContainer.removeEventListener('scrollend', onScrollEnd);
+        };
+        chatContainer.addEventListener('scrollend', onScrollEnd);
+        // fallback for browsers without scrollend support
+        setTimeout(() => { isProgrammaticScroll = false; chatContainer.removeEventListener('scrollend', onScrollEnd); }, 500);
       }
     }
 
@@ -3696,7 +3711,7 @@ function initMessageRenderer() {
       `;
       
       chatContainer.appendChild(card);
-      chatContainer.scrollTop = chatContainer.scrollHeight;
+      isProgrammaticScroll = true; chatContainer.scrollTop = chatContainer.scrollHeight; isProgrammaticScroll = false;
     }
 
     // 增强的 applyFileChange：收集所有后续代码块并拼接
@@ -3884,6 +3899,8 @@ function initMessageRenderer() {
         case 'agentPaused': {
           // agent 挂起等待用户确认，显示等待提示，强制禁用输入框和发送按钮
           isGenerating = true;
+          isAgentPaused = true;
+          updateModifyDecisionBar();
           updateButtonState();
           const pauseEl = document.getElementById('agent-pause-indicator');
           if (!pauseEl) {
@@ -3892,12 +3909,13 @@ function initMessageRenderer() {
             el.className = 'system-message';
             el.textContent = `⏸️ ${message.reason || '等待用户确认...'}`;
             chatContainer.appendChild(el);
-            if (!userHasScrolledUp) chatContainer.scrollTop = chatContainer.scrollHeight;
+            if (!userHasScrolledUp) { isProgrammaticScroll = true; chatContainer.scrollTop = chatContainer.scrollHeight; isProgrammaticScroll = false; }
           }
           break;
         }
         case 'agentResumed':
           // agent 恢复，移除等待提示（isGenerating 保持 true，由 streamEnd 恢复）
+          isAgentPaused = false;
           document.getElementById('agent-pause-indicator')?.remove();
           break;
 
@@ -4036,7 +4054,7 @@ function initMessageRenderer() {
           updateButtonState();
           if (navigator.onLine) updateConnectionStatus('online');
           messageRenderer.startStream(message.silent);
-          userHasScrolledUp = false;
+          if (history.length === 0) { userHasScrolledUp = false; }
           break;
           
         case 'streamUpdate':
@@ -4052,6 +4070,13 @@ function initMessageRenderer() {
           }
 
           persistHistory();
+
+          if (message.intermediate) {
+            // 中间过程 streamEnd，仅用于渲染，不改变 isGenerating 状态
+            smartScroll();
+            break;
+          }
+
           isGenerating = false;
           updateButtonState();
 
@@ -4062,6 +4087,7 @@ function initMessageRenderer() {
             if (modifiedFiles.size > 0) {
               updateModifyDecisionBar();
             }
+            smartScroll();
           }, 150);
           break;
           

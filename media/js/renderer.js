@@ -282,11 +282,13 @@ class MessageRenderer {
       }
     }
 
-    // 流式渲染中用即时滚动，避免 smooth 动画每帧重启导致跳动
+    // 流式渲染：延迟到下一帧读取 scrollHeight，确保 DOM reflow 完成后再滚动
     if (typeof userHasScrolledUp !== 'undefined' && !userHasScrolledUp) {
-      isProgrammaticScroll = true;
-      chatContainer.scrollTop = chatContainer.scrollHeight;
-      isProgrammaticScroll = false;
+      requestAnimationFrame(() => {
+        isProgrammaticScroll = true;
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        isProgrammaticScroll = false;
+      });
     }
   }
 

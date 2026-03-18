@@ -47,6 +47,7 @@ let history = [];
 let currentMode = 'chat';
 let attachedFiles = [];
 let isGenerating = false;
+let isAgentPaused = false;
 let isWebSearchEnabled = false;
 let activeSettingsTab = 'online';
 let userHasScrolledUp = false;

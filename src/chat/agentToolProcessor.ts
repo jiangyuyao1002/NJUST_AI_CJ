@@ -128,7 +128,7 @@ export class AgentToolProcessor {
     enableAutoCorrection: true,
     enableRetry: true,
     maxRetries: 2,
-    enableReflection: true,
+    enableReflection: false,
     taskCompletionCheck: true,
     maxConsecutiveNoOps: 1
   };
@@ -475,7 +475,7 @@ export class AgentToolProcessor {
       }
     }
 
-    if (taskCompletionCheck && iteration > 0) {
+    if (taskCompletionCheck) {
       const completionResult = await this.checkTaskCompletion(provider, history, model, config, abortSignal);
       if (!completionResult.shouldContinue) {
         provider.postMessageToWebview({
@@ -752,21 +752,8 @@ ${errorList}
       }
     }
 
-    if (toolCallCount === 0) {
-      reasons.push('未执行任何工具调用');
-    }
-
-    if (successCount > 0 && failureCount === 0) {
+    if (successCount > 0 && failureCount === 0 && toolCallCount > 0) {
       reasons.push('所有工具调用均成功');
-    }
-
-    // 优化：降低简单任务的完成门槛
-    if (successCount >= 1 && toolCallCount >= 1 && failureCount === 0) {
-      reasons.push('已成功执行工具调用');
-    }
-
-    if (successCount >= 2 && toolCallCount >= 2) {
-      reasons.push('已执行多个工具且均成功');
     }
 
     const lastAssistantMsg = history.filter(m => m.role === 'assistant').pop();
@@ -774,14 +761,13 @@ ${errorList}
       reasons.push('AI 明确表示任务完成');
     }
 
-    // 优化：最近回复无工具调用且已有成功执行 → 可能已完成
-    if (lastAssistantMsg && !this.hasToolCalls(lastAssistantMsg.content) && successCount >= 1) {
+    // 最近回复无工具调用且已有成功执行 → 任务已完成，不需要继续
+    if (lastAssistantMsg && !this.hasToolCalls(lastAssistantMsg.content) && successCount >= 1 && failureCount === 0) {
       reasons.push('最近回复无工具调用且已有成功执行');
     }
 
-    // 优化：降低完成判断门槛
-    const completed = reasons.length >= 1 || (successCount >= 1 && toolCallCount >= 1 && failureCount === 0);
-    const progress = Math.min(100, Math.round((successCount / Math.max(1, toolCallCount)) * 100));
+    const completed = reasons.length >= 1;
+    const progress = toolCallCount === 0 ? 0 : Math.min(100, Math.round((successCount / toolCallCount) * 100));
     return { completed, progress, reasons };
   }
 
@@ -793,60 +779,13 @@ ${errorList}
     abortSignal?: AbortSignal
   ): Promise<{ completed: boolean; shouldContinue: boolean; feedback?: string }> {
     const taskAnalysis = this.analyzeTaskProgress(history, '');
-    
-    // 优化：对于简单任务，直接使用基础判断，避免额外的 AI 调用
-    if (taskAnalysis.completed && taskAnalysis.progress >= 100) {
-      return {
-        completed: true,
-        shouldContinue: false,
-        feedback: `任务已完成: ${taskAnalysis.reasons.join('; ')}`
-      };
-    }
-
-    const reflectionPrompt = `你是一个任务完成度评估专家。请根据对话历史判断当前任务是否已经完成。
-
-【对话历史】
-${history.slice(-10).map(m => `${m.role}: ${m.content.substring(0, 200)}`).join('\n')}
-
-请分析并回答以下问题：
-1. 用户的原始需求是什么？
-2. 目前已完成了哪些步骤？
-3. 是否还有未完成的关键步骤？
-4. 任务是否可以结束？
-
-请用以下格式返回：
-COMPLETION: true/false
-REASON: <简短解释>
-SUGGESTION: <如果未完成，应该做什么>}`;
-
-    try {
-      const apiKey = getApiKey(config, model);
-      const response = await callChatAI(
-        model,
-        apiKey,
-        [{ role: 'system', content: reflectionPrompt }, { role: 'user', content: '请评估任务完成度' }],
-        config,
-        AI.SHORT_MAX_TOKENS,
-        0.3,
-        abortSignal
-      );
-
-      const isComplete = /COMPLETION:\s*true/i.test(response);
-      const reasonMatch = response.match(/REASON:\s*(.+)/i);
-      const suggestionMatch = response.match(/SUGGESTION:\s*(.+)/i);
-
-      return {
-        completed: isComplete,
-        shouldContinue: !isComplete,
-        feedback: reasonMatch ? reasonMatch[1] : (isComplete ? '任务已完成' : '需要继续执行')
-      };
-    } catch (error) {
-      return {
-        completed: taskAnalysis.completed,
-        shouldContinue: !taskAnalysis.completed,
-        feedback: '无法自动评估，使用基础判断'
-      };
-    }
+    return {
+      completed: taskAnalysis.completed,
+      shouldContinue: !taskAnalysis.completed,
+      feedback: taskAnalysis.completed
+        ? `任务已完成: ${taskAnalysis.reasons.join('; ')}`
+        : '继续执行'
+    };
   }
 
   private static async performReflection(

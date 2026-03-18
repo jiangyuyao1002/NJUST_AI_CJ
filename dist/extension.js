@@ -46215,6 +46215,8 @@ var fileTool = createTool(
     const result = await handleFileChange(path20, content, true, provider.fileBackupMap, provider.view, {}, provider);
     if (result.editType === "create")
       return `\u6587\u4EF6\u5DF2\u521B\u5EFA: ${path20}`;
+    if (result.changesCount === 0)
+      return `\u6587\u4EF6\u5185\u5BB9\u65E0\u53D8\u5316\uFF0C\u672A\u505A\u4EFB\u4F55\u4FEE\u6539: ${path20}`;
     if (result.editType === "partial")
       return `\u6587\u4EF6\u5DF2\u5C40\u90E8\u4FEE\u6539: ${path20} (${result.changesCount} \u5904\u53D8\u66F4)`;
     return `\u6587\u4EF6\u5DF2\u66F4\u65B0: ${path20}`;
@@ -46454,6 +46456,8 @@ var smartEditTool = createTool(
       }
       provider.postMessageToWebview({ type: "agentResumed" });
     }
+    if (result.changesCount === 0)
+      return `\u6587\u4EF6\u5185\u5BB9\u65E0\u53D8\u5316\uFF0C\u672A\u505A\u4EFB\u4F55\u4FEE\u6539: ${path20}`;
     return `\u667A\u80FD\u7F16\u8F91\u5B8C\u6210: ${path20} (${result.editType}, ${result.changesCount} \u5904\u4FEE\u6539)`;
   }
 );
@@ -47782,7 +47786,7 @@ var AgentToolProcessor = class {
       enableAutoCorrection: true,
       enableRetry: true,
       maxRetries: 2,
-      enableReflection: true,
+      enableReflection: false,
       taskCompletionCheck: true,
       maxConsecutiveNoOps: 1
     };
@@ -48039,7 +48043,7 @@ ${content}`
         return;
       }
     }
-    if (taskCompletionCheck && iteration > 0) {
+    if (taskCompletionCheck) {
       const completionResult = await this.checkTaskCompletion(provider, history, model, config2, abortSignal);
       if (!completionResult.shouldContinue) {
         provider.postMessageToWebview({
@@ -48259,79 +48263,27 @@ ${validationErrors.join("\n")}`;
         }
       }
     }
-    if (toolCallCount === 0) {
-      reasons.push("\u672A\u6267\u884C\u4EFB\u4F55\u5DE5\u5177\u8C03\u7528");
-    }
-    if (successCount > 0 && failureCount === 0) {
+    if (successCount > 0 && failureCount === 0 && toolCallCount > 0) {
       reasons.push("\u6240\u6709\u5DE5\u5177\u8C03\u7528\u5747\u6210\u529F");
-    }
-    if (successCount >= 1 && toolCallCount >= 1 && failureCount === 0) {
-      reasons.push("\u5DF2\u6210\u529F\u6267\u884C\u5DE5\u5177\u8C03\u7528");
-    }
-    if (successCount >= 2 && toolCallCount >= 2) {
-      reasons.push("\u5DF2\u6267\u884C\u591A\u4E2A\u5DE5\u5177\u4E14\u5747\u6210\u529F");
     }
     const lastAssistantMsg = history.filter((m) => m.role === "assistant").pop();
     if (lastAssistantMsg && this.isCompletionSignal(lastAssistantMsg.content)) {
       reasons.push("AI \u660E\u786E\u8868\u793A\u4EFB\u52A1\u5B8C\u6210");
     }
-    if (lastAssistantMsg && !this.hasToolCalls(lastAssistantMsg.content) && successCount >= 1) {
+    if (lastAssistantMsg && !this.hasToolCalls(lastAssistantMsg.content) && successCount >= 1 && failureCount === 0) {
       reasons.push("\u6700\u8FD1\u56DE\u590D\u65E0\u5DE5\u5177\u8C03\u7528\u4E14\u5DF2\u6709\u6210\u529F\u6267\u884C");
     }
-    const completed = reasons.length >= 1 || successCount >= 1 && toolCallCount >= 1 && failureCount === 0;
-    const progress = Math.min(100, Math.round(successCount / Math.max(1, toolCallCount) * 100));
+    const completed = reasons.length >= 1;
+    const progress = toolCallCount === 0 ? 0 : Math.min(100, Math.round(successCount / toolCallCount * 100));
     return { completed, progress, reasons };
   }
   static async checkTaskCompletion(provider, history, model, config2, abortSignal) {
     const taskAnalysis = this.analyzeTaskProgress(history, "");
-    if (taskAnalysis.completed && taskAnalysis.progress >= 100) {
-      return {
-        completed: true,
-        shouldContinue: false,
-        feedback: `\u4EFB\u52A1\u5DF2\u5B8C\u6210: ${taskAnalysis.reasons.join("; ")}`
-      };
-    }
-    const reflectionPrompt = `\u4F60\u662F\u4E00\u4E2A\u4EFB\u52A1\u5B8C\u6210\u5EA6\u8BC4\u4F30\u4E13\u5BB6\u3002\u8BF7\u6839\u636E\u5BF9\u8BDD\u5386\u53F2\u5224\u65AD\u5F53\u524D\u4EFB\u52A1\u662F\u5426\u5DF2\u7ECF\u5B8C\u6210\u3002
-
-\u3010\u5BF9\u8BDD\u5386\u53F2\u3011
-${history.slice(-10).map((m) => `${m.role}: ${m.content.substring(0, 200)}`).join("\n")}
-
-\u8BF7\u5206\u6790\u5E76\u56DE\u7B54\u4EE5\u4E0B\u95EE\u9898\uFF1A
-1. \u7528\u6237\u7684\u539F\u59CB\u9700\u6C42\u662F\u4EC0\u4E48\uFF1F
-2. \u76EE\u524D\u5DF2\u5B8C\u6210\u4E86\u54EA\u4E9B\u6B65\u9AA4\uFF1F
-3. \u662F\u5426\u8FD8\u6709\u672A\u5B8C\u6210\u7684\u5173\u952E\u6B65\u9AA4\uFF1F
-4. \u4EFB\u52A1\u662F\u5426\u53EF\u4EE5\u7ED3\u675F\uFF1F
-
-\u8BF7\u7528\u4EE5\u4E0B\u683C\u5F0F\u8FD4\u56DE\uFF1A
-COMPLETION: true/false
-REASON: <\u7B80\u77ED\u89E3\u91CA>
-SUGGESTION: <\u5982\u679C\u672A\u5B8C\u6210\uFF0C\u5E94\u8BE5\u505A\u4EC0\u4E48>}`;
-    try {
-      const apiKey = getApiKey(config2, model);
-      const response = await callChatAI(
-        model,
-        apiKey,
-        [{ role: "system", content: reflectionPrompt }, { role: "user", content: "\u8BF7\u8BC4\u4F30\u4EFB\u52A1\u5B8C\u6210\u5EA6" }],
-        config2,
-        AI.SHORT_MAX_TOKENS,
-        0.3,
-        abortSignal
-      );
-      const isComplete = /COMPLETION:\s*true/i.test(response);
-      const reasonMatch = response.match(/REASON:\s*(.+)/i);
-      const suggestionMatch = response.match(/SUGGESTION:\s*(.+)/i);
-      return {
-        completed: isComplete,
-        shouldContinue: !isComplete,
-        feedback: reasonMatch ? reasonMatch[1] : isComplete ? "\u4EFB\u52A1\u5DF2\u5B8C\u6210" : "\u9700\u8981\u7EE7\u7EED\u6267\u884C"
-      };
-    } catch (error2) {
-      return {
-        completed: taskAnalysis.completed,
-        shouldContinue: !taskAnalysis.completed,
-        feedback: "\u65E0\u6CD5\u81EA\u52A8\u8BC4\u4F30\uFF0C\u4F7F\u7528\u57FA\u7840\u5224\u65AD"
-      };
-    }
+    return {
+      completed: taskAnalysis.completed,
+      shouldContinue: !taskAnalysis.completed,
+      feedback: taskAnalysis.completed ? `\u4EFB\u52A1\u5DF2\u5B8C\u6210: ${taskAnalysis.reasons.join("; ")}` : "\u7EE7\u7EED\u6267\u884C"
+    };
   }
   static async performReflection(provider, history, model, config2, userRequest, abortSignal, iteration = 0) {
     const reflectionPrompt = `\u4F60\u662F\u4E00\u4E2A\u81EA\u6211\u53CD\u601D\u4E13\u5BB6\u3002\u8BF7\u5206\u6790\u4F60\u521A\u624D\u7684\u6267\u884C\u7ED3\u679C\uFF0C\u5224\u65AD\u662F\u5426\u9700\u8981\u7EE7\u7EED\u6216\u8C03\u6574\u3002
@@ -48757,7 +48709,7 @@ ${webSearchResults}`;
     });
     const cleanFinalContent = finalContent.replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, "").trimStart();
     pushVisibleAssistantMessage(provider, history, cleanFinalContent);
-    view.webview.postMessage({ type: "streamEnd" });
+    view.webview.postMessage({ type: "streamEnd", intermediate: true });
     if (mode !== "agent" || signal.aborted) {
     } else {
       const planningContext = {
@@ -48791,9 +48743,9 @@ ${webSearchResults}`;
           enableAutoCorrection: true,
           enableRetry: true,
           maxRetries: 2,
-          enableReflection: config2.get("agent.enableReflection", true),
+          enableReflection: config2.get("agent.enableReflection", false),
           taskCompletionCheck: config2.get("agent.taskCompletionCheck", true),
-          maxConsecutiveNoOps: config2.get("agent.maxConsecutiveNoOps", 3)
+          maxConsecutiveNoOps: config2.get("agent.maxConsecutiveNoOps", 1)
         };
         await AgentToolProcessor.processAgentTools(
           provider,

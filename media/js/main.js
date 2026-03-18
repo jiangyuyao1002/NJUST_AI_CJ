@@ -319,7 +319,7 @@
 
     function updateModifyDecisionBar() {
       if (!modifyDecisionBar) return;
-      const visible = modifiedFiles.size > 0 && !isGenerating;
+      const visible = modifiedFiles.size > 0 && !isGenerating && !isAgentPaused;
       modifyDecisionBar.style.display = visible ? 'flex' : 'none';
       if (visible) modifyDecisionBar.classList.add('visible');
       else modifyDecisionBar.classList.remove('visible');
@@ -1766,6 +1766,8 @@
         case 'agentPaused': {
           // agent 挂起等待用户确认，显示等待提示，强制禁用输入框和发送按钮
           isGenerating = true;
+          isAgentPaused = true;
+          updateModifyDecisionBar();
           updateButtonState();
           const pauseEl = document.getElementById('agent-pause-indicator');
           if (!pauseEl) {
@@ -1780,6 +1782,7 @@
         }
         case 'agentResumed':
           // agent 恢复，移除等待提示（isGenerating 保持 true，由 streamEnd 恢复）
+          isAgentPaused = false;
           document.getElementById('agent-pause-indicator')?.remove();
           break;
 
@@ -1934,6 +1937,13 @@
           }
 
           persistHistory();
+
+          if (message.intermediate) {
+            // 中间过程 streamEnd，仅用于渲染，不改变 isGenerating 状态
+            smartScroll();
+            break;
+          }
+
           isGenerating = false;
           updateButtonState();
 

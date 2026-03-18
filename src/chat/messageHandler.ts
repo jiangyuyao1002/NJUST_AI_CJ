@@ -480,7 +480,8 @@ ${chatSystemPrompt}`;
     pushVisibleAssistantMessage(provider, history, cleanFinalContent);
 
     // 在工具执行前先发送 streamEnd，让前端完成当前消息的渲染
-    view.webview.postMessage({ type: 'streamEnd' });
+    // intermediate: true 表示这是中间过程，agent 尚未真正结束
+    view.webview.postMessage({ type: 'streamEnd', intermediate: true });
 
     if (mode !== 'agent' || signal.aborted) {
       // Chat 模式不执行任何工具，仅展示 AI 回复
@@ -520,9 +521,9 @@ ${chatSystemPrompt}`;
           enableAutoCorrection: true,
           enableRetry: true,
           maxRetries: 2,
-          enableReflection: config.get<boolean>('agent.enableReflection', true),
+          enableReflection: config.get<boolean>('agent.enableReflection', false),
           taskCompletionCheck: config.get<boolean>('agent.taskCompletionCheck', true),
-          maxConsecutiveNoOps: config.get<number>('agent.maxConsecutiveNoOps', 3)
+          maxConsecutiveNoOps: config.get<number>('agent.maxConsecutiveNoOps', 1)
         };
 
         await AgentToolProcessor.processAgentTools(

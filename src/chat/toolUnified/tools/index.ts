@@ -41,6 +41,7 @@ export const fileTool = createTool(
     const provider = ctx.provider as LLMAChatProvider;
     const result = await handleFileChange(path, content, true, provider.fileBackupMap, provider.view, {}, provider);
     if (result.editType === 'create') return `文件已创建: ${path}`;
+    if (result.changesCount === 0) return `文件内容无变化，未做任何修改: ${path}`;
     if (result.editType === 'partial') return `文件已局部修改: ${path} (${result.changesCount} 处变更)`;
     return `文件已更新: ${path}`;
   }
@@ -308,6 +309,7 @@ export const smartEditTool = createTool(
       provider.postMessageToWebview({ type: 'agentResumed' });
     }
 
+    if (result.changesCount === 0) return `文件内容无变化，未做任何修改: ${path}`;
     return `智能编辑完成: ${path} (${result.editType}, ${result.changesCount} 处修改)`;
   }
 );
