@@ -471,8 +471,9 @@
   },
   "devDependencies": {
     "@types/diff-match-patch": "^1.0.2",
-    "@types/node": "20.x",
-    "@types/vscode": "^1.108.1",
+    "@types/json-schema": "^7.0.15",
+    "@types/node": "^20.19.37",
+    "@types/vscode": "^1.110.0",
     "@typescript-eslint/eslint-plugin": "^8.54.0",
     "@typescript-eslint/parser": "^8.54.0",
     "@vscode/test-cli": "^0.0.4",
