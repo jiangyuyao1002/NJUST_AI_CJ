@@ -484,7 +484,8 @@ ${chatSystemPrompt}`;
     view.webview.postMessage({ type: 'streamEnd', intermediate: true });
 
     if (mode !== 'agent' || signal.aborted) {
-      // Chat 模式不执行任何工具，仅展示 AI 回复
+      // Chat 模式不执行任何工具，仅展示 AI 回复，发送最终 streamEnd
+      view.webview.postMessage({ type: 'streamEnd' });
     } else {
       const planningContext: TaskExecutionContext = {
         workspaceRoot: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',

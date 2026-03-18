@@ -510,6 +510,7 @@ body.light-theme .mode-panel-option:hover {
     .chat-container {
   flex: 1; overflow-y: auto; padding: 12px;
   display: flex; flex-direction: column; gap: 12px;
+  overflow-anchor: auto;
   background: var(--editor-bg);
   position: relative;
 }
@@ -1549,8 +1550,9 @@ textarea {
         <span class="badge">流式输出</span>
       </div>
     </div>
+    <div id="scroll-anchor" style="overflow-anchor: auto; height: 1px;"></div>
   </div>
-  
+
   <div class="attachments-bar" id="attachments-bar">
     <span class="attachments-label">📎 已添加:</span>
     <div class="file-chips" id="file-chips"></div>

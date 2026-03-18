@@ -2,7 +2,7 @@
   "name": "njust-cj",
   "displayName": "NJUST_AI_CJ",
   "description": "AI Code Assistant with Chat, File Creation, Inline Prediction, and Compilation.",
-  "version": "2026.3.18",
+  "version": "3.18.1",
   "publisher": "YuyaoJiang-JunjieChen",
   "icon": "./NJUST.png",
   "engines": {

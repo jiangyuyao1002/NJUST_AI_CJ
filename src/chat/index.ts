@@ -133,7 +133,7 @@ export class LLMAChatProvider implements vscode.WebviewViewProvider {
   private _getLogFilePath(): string {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (workspaceFolders && workspaceFolders.length > 0) {
-      return path.join(workspaceFolders[0].uri.fsPath, '.llma_history.jsonl');
+      return path.join(workspaceFolders[0].uri.fsPath, '.llma', 'chat_history.jsonl');
     } else {
       return path.join(this._context.globalStorageUri.fsPath, 'chat_history.jsonl');
     }

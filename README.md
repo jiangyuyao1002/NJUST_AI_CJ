@@ -68,6 +68,415 @@
 
 ---
 
+## 快捷键
+
+### 全局快捷键
+
+| 快捷键 | 命令 | 描述 |
+|--------|------|------|
+| `Ctrl+Shift+A` / `Cmd+Shift+A` | LLMA: 生成完整代码 | 根据注释或选中代码生成完整代码 |
+| `Alt+\` | LLMA: 手动触发 Ghost Text | 手动触发代码补全 |
+| `Ctrl+Shift+B` / `Cmd+Shift+B` | LLMA: 编译当前文件 | 编译当前文件 |
+| `Ctrl+Shift+Q` / `Cmd+Shift+Q` | LLMA: 切换聊天/Agent 模式 | 切换聊天模式和 Agent 模式 |
+
+### 聊天界面快捷键
+
+| 快捷键 | 描述 |
+|--------|------|
+| `Enter` | 发送消息（输入框聚焦时） |
+| `Shift+Enter` | 换行（输入框聚焦时） |
+| `Escape` | 关闭搜索框/设置面板 |
+
+---
+
+## Agent 模式工具指令详解
+
+Agent 模式下，AI 可以使用以下工具指令直接操作你的项目：
+
+### 文件操作工具
+
+#### 1. `> FILE: <filepath>`
+创建或覆盖文件。AI 会在指令后输出完整的文件内容。
+
+**使用场景**：
+- 创建新文件
+- 大范围重写现有文件
+
+**示例**：
+```
+> FILE: src/utils.ts
+```typescript
+export function add(a: number, b: number): number {
+  return a + b;
+}
+```
+```
+
+---
+
+#### 2. `> READ: <filepath>`
+读取文件内容，供 AI 了解当前文件状态。
+
+**使用场景**：
+- 修改前查看文件内容
+- 了解项目结构
+
+**示例**：
+```
+> READ: src/app.ts
+```
+
+---
+
+#### 3. `> REPLACE: <filepath>`
+精确替换文件中的指定文本。这是最精确的编辑方式。
+
+**使用场景**：
+- 小范围修改（1-10行）
+- 精确替换特定代码片段
+
+**格式**：
+```
+> REPLACE: src/app.ts
+<ORIGINAL>
+// 要替换的原文本（必须与文件中完全一致）
+</ORIGINAL>
+<NEW>
+// 替换后的新文本
+</NEW>
+```
+
+**示例**：
+```
+> REPLACE: src/utils.ts
+<ORIGINAL>
+export function add(a: number, b: number): number {
+  return a + b;
+}
+</ORIGINAL>
+<NEW>
+export function add(a: number, b: number): number {
+  console.log(`Adding ${a} and ${b}`);
+  return a + b;
+}
+</NEW>
+```
+
+---
+
+#### 4. `> EDIT_FUNCTION: <filepath> <functionName>`
+修改文件中的整个函数。
+
+**使用场景**：
+- 修改整个函数实现
+- 保持函数签名不变
+
+**示例**：
+```
+> EDIT_FUNCTION: src/utils.ts add
+```typescript
+export function add(a: number, b: number): number {
+  console.log(`Adding ${a} and ${b}`);
+  return a + b;
+}
+```
+```
+
+---
+
+#### 5. `> EDIT_CLASS: <filepath> <className>`
+修改文件中的整个类。
+
+**使用场景**：
+- 修改整个类实现
+- 重构类结构
+
+**示例**：
+```
+> EDIT_CLASS: src/models/User.ts User
+```typescript
+export class User {
+  id: string;
+  name: string;
+  email: string;
+  
+  constructor(data: Partial<User>) {
+    Object.assign(this, data);
+  }
+}
+```
+```
+
+---
+
+#### 6. `> EDIT_LINE_CONTAINING: <filepath> <textPattern>`
+修改包含特定文本的行。
+
+**使用场景**：
+- 修改特定配置行
+- 更新导入语句
+
+**示例**：
+```
+> EDIT_LINE_CONTAINING: package.json "version": "1.0.0"
+```
+"version": "1.1.0"
+```
+
+---
+
+#### 7. `> EDIT_BLOCK: <filepath>`
+基于行号范围编辑文件。
+
+**格式**：
+```
+> EDIT_BLOCK: src/app.ts
+startLine: 10
+endLine: 20
+---
+```typescript
+// 新的代码块内容
+```
+```
+
+**使用场景**：
+- 修改特定行范围
+- 删除或插入代码块
+
+---
+
+#### 8. `> RANGE_EDIT: <filepath>`
+基于字符位置范围编辑文件。
+
+**格式**：
+```
+> RANGE_EDIT: src/app.ts
+start: 100
+end: 200
+---
+```typescript
+// 新的代码内容
+```
+```
+
+**使用场景**：
+- 精确字符级编辑
+- 替换特定字符串
+
+---
+
+#### 9. `> DIFF: <filepath>`
+应用 diff 格式的修改。
+
+**格式**：
+```
+> DIFF: src/app.ts
+```diff
+- 删除的行
++ 添加的行
+```
+```
+
+**使用场景**：
+- 复杂的代码重构
+- 多行修改
+
+---
+
+#### 10. `> MKDIR: <dirpath>`
+创建目录。
+
+**示例**：
+```
+> MKDIR: src/components
+```
+
+---
+
+### 批量操作工具
+
+#### 11. `> MULTI_FILE:`
+批量创建或修改多个文件。
+
+**格式**：
+```
+> MULTI_FILE:
+[
+  {
+    "path": "src/utils.ts",
+    "content": "export const PI = 3.14159;"
+  },
+  {
+    "path": "src/config.ts",
+    "content": "export const API_URL = 'https://api.example.com';"
+  }
+]
+```
+
+**使用场景**：
+- 创建项目脚手架
+- 批量生成组件
+
+---
+
+#### 12. `> APPLY_BATCH:`
+批量应用编辑操作。
+
+**格式**：
+```
+> APPLY_BATCH:
+[
+  {
+    "filepath": "src/app.ts",
+    "original": "old code",
+    "new": "new code"
+  }
+]
+```
+
+---
+
+### 命令执行工具
+
+#### 13. `> RUN: <command>`
+执行终端命令。
+
+**示例**：
+```
+> RUN: npm install
+> RUN: npm run build
+> RUN: python -m pytest
+```
+
+**安全提示**：
+- 默认需要用户确认
+- 可配置为自动允许（请谨慎开启）
+- 危险命令会被拦截
+
+---
+
+### MCP 工具
+
+#### 14. `> MCP: <serverName> <toolName> [JSON参数]`
+调用 MCP 服务器提供的工具。
+
+**示例**：
+```
+> MCP: filesystem read_file {"path": "/path/to/file"}
+```
+
+---
+
+### 项目模板工具
+
+#### 15. `> PROJECT:`
+创建完整的项目结构。
+
+**格式**：
+```
+> PROJECT:
+{
+  "name": "my-project",
+  "template": "react-ts",
+  "files": [
+    {"path": "src/index.tsx", "content": "..."}
+  ]
+}
+```
+
+---
+
+## 执行流程说明
+
+### 1. 聊天模式执行流程
+
+```
+用户输入 → 上下文收集 → AI 生成回复 → 流式展示 → 结束
+```
+
+**上下文收集包括**：
+- 当前活动文件内容
+- 选中代码片段
+- 用户附加的文件
+- 联网搜索结果（如开启）
+
+### 2. Agent 模式执行流程
+
+```
+用户输入 → 任务规划（可选）→ 上下文收集 → AI 生成回复
+                                              ↓
+用户确认 ← 展示结果 ← 执行工具 ← 解析工具指令
+   ↓
+继续对话 ← 返回执行反馈
+```
+
+**详细步骤**：
+
+1. **任务规划**（复杂任务）：
+   - 分析用户请求
+   - 分解为可执行步骤
+   - 评估风险等级
+   - 建立步骤依赖关系
+
+2. **上下文收集**：
+   - 活动文件（200行上下文）
+   - 可见编辑器内容
+   - 打开文件列表
+   - 相关文件（import 依赖）
+   - 诊断信息（错误/警告）
+   - 工作区结构
+   - 符号索引和代码图
+   - AST 分析结果
+
+3. **AI 生成回复**：
+   - 流式输出
+   - 思考过程展示
+   - 工具指令标记
+
+4. **工具解析与执行**：
+   - 解析工具指令
+   - 验证参数
+   - 执行工具
+   - 收集执行结果
+
+5. **自动迭代**（Agent 模式）：
+   - 将执行结果反馈给 AI
+   - AI 生成下一步操作
+   - 重复直到任务完成
+   - 反思机制评估进度
+   - 任务完成检查
+
+### 3. 代码补全执行流程
+
+```
+用户输入 → 延迟检测 → 准备上下文 → 调用 AI → 展示补全
+```
+
+**智能补全额外步骤**：
+- 学习项目代码模式
+- 分析项目上下文
+- 预测用户意图
+- 提供多选项补全
+
+### 4. 编译执行流程
+
+```
+用户触发编译 → 检测语言 → 选择编译器 → 执行编译
+                                                  ↓
+运行可执行文件 ← 展示结果 ← 分析输出 ← 捕获输出
+```
+
+**编译占位符**：
+- `{file}`：当前文件路径
+- `{allFiles}`：同目录下所有相关源文件
+- `{executable}`：输出可执行文件路径
+- `{outputDir}`：输出目录
+- `{fileName}`：文件名
+- `{fileNameWithoutExt}`：不带扩展名的文件名
+- `{fileDir}`：文件所在目录
+
+---
+
 ## 技术栈分析
 
 ### 核心技术架构
@@ -349,17 +758,6 @@ src/
 | 设置项 | 类型 | 默认值 | 描述 |
 |--------|------|--------|------|
 | `llma.chat.typingEffect` | boolean | `true` | 启用流式输出的打字机效果（闪烁光标 + 内容渐入） |
-
----
-
-## 快捷键
-
-| 快捷键 | 命令 | 描述 |
-|--------|------|------|
-| `Ctrl+Shift+A` / `Cmd+Shift+A` | LLMA: 生成完整代码 | 根据注释或选中代码生成完整代码 |
-| `Alt+\` | LLMA: 手动触发 Ghost Text | 手动触发代码补全 |
-| `Ctrl+Shift+B` / `Cmd+Shift+B` | LLMA: 编译当前文件 | 编译当前文件 |
-| `Ctrl+Shift+Q` / `Cmd+Shift+Q` | LLMA: 切换聊天/Agent 模式 | 切换聊天模式和 Agent 模式 |
 
 ---
 

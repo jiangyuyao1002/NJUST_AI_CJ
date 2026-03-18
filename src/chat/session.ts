@@ -59,6 +59,10 @@ export class ChatSessionManager {
    * @returns 会话文件的完整路径
    */
   private _getSessionsFilePath(): string {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders && workspaceFolders.length > 0) {
+      return path.join(workspaceFolders[0].uri.fsPath, '.llma', 'sessions.json');
+    }
     return path.join(this._context.globalStorageUri.fsPath, 'sessions.json');
   }
 

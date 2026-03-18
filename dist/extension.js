@@ -44053,6 +44053,10 @@ var ChatSessionManager = class {
    * @returns 会话文件的完整路径
    */
   _getSessionsFilePath() {
+    const workspaceFolders = vscode8.workspace.workspaceFolders;
+    if (workspaceFolders && workspaceFolders.length > 0) {
+      return path10.join(workspaceFolders[0].uri.fsPath, ".llma", "sessions.json");
+    }
     return path10.join(this._context.globalStorageUri.fsPath, "sessions.json");
   }
   /**
@@ -48711,6 +48715,7 @@ ${webSearchResults}`;
     pushVisibleAssistantMessage(provider, history, cleanFinalContent);
     view.webview.postMessage({ type: "streamEnd", intermediate: true });
     if (mode !== "agent" || signal.aborted) {
+      view.webview.postMessage({ type: "streamEnd" });
     } else {
       const planningContext = {
         workspaceRoot: vscode16.workspace.workspaceFolders?.[0]?.uri.fsPath || "",
@@ -49492,7 +49497,7 @@ var LLMAChatProvider = class {
   _getLogFilePath() {
     const workspaceFolders = vscode18.workspace.workspaceFolders;
     if (workspaceFolders && workspaceFolders.length > 0) {
-      return path18.join(workspaceFolders[0].uri.fsPath, ".llma_history.jsonl");
+      return path18.join(workspaceFolders[0].uri.fsPath, ".llma", "chat_history.jsonl");
     } else {
       return path18.join(this._context.globalStorageUri.fsPath, "chat_history.jsonl");
     }

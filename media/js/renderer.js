@@ -241,17 +241,15 @@ class MessageRenderer {
       }
     }
 
-    // 渲染内容 - 优化：仅在内容变化时更新
+    // 渲染内容
     if (state.hasContent) {
       const contentData = this.contentRenderer.renderContent(state.content, true);
       if (contentData) {
         if (oldContent) {
-          // 优化：直接更新 innerHTML 而非替换整个节点，减少重排
           if (oldContent.innerHTML !== contentData.html) {
             oldContent.className = contentData.className;
             oldContent.innerHTML = contentData.html;
 
-            // 在 DOM 中复用已有卡片节点
             oldContent.querySelectorAll('.file-action-card').forEach(newCard => {
               const fp = newCard.dataset.filepath;
               const oldCard = this._fileCards.get(fp);
@@ -282,14 +280,10 @@ class MessageRenderer {
       }
     }
 
-    // 流式渲染：延迟到下一帧读取 scrollHeight，确保 DOM reflow 完成后再滚动
-    if (typeof userHasScrolledUp !== 'undefined' && !userHasScrolledUp) {
-      requestAnimationFrame(() => {
-        isProgrammaticScroll = true;
-        chatContainer.scrollTop = chatContainer.scrollHeight;
-        isProgrammaticScroll = false;
-      });
-    }
+    // DOM 更新后始终滚动到最底部，追踪最新生成内容
+    isProgrammaticScroll = true;
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    requestAnimationFrame(() => { isProgrammaticScroll = false; });
   }
 
   endStream() {
@@ -372,6 +366,11 @@ class MessageRenderer {
         this.container.contentContainer.appendChild(newContent);
       }
     }
+
+    // 最终渲染后始终滚动到最底部，追踪最新生成内容
+    isProgrammaticScroll = true;
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    requestAnimationFrame(() => { isProgrammaticScroll = false; });
   }
 
   reset() {
