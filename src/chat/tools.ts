@@ -30,6 +30,7 @@ import { EditDescription, ChatHistory } from '../types';
 import { TIMEOUT } from '../constants';
 import { SmartEditor, SmartEditResult, resolveFilePath } from './smartEditor';
 import { revealEditLocation, calculateEditRange, openFileAtLocation } from './editLocator';
+import { globalASTRegistry } from '../ast';
 
 /**
  * 等待用户确认文件修改
@@ -216,14 +217,26 @@ export async function handleReplaceEdit(
 
     if (!found) {
         const dmpInstance = new dmp.diff_match_patch();
-        dmpInstance.Match_Threshold = 0.6;
-        dmpInstance.Patch_DeleteThreshold = 0.6;
-        const patches = dmpInstance.patch_make(original, newText);
-        if (patches.length > 0) {
-            const [patchedText, results] = dmpInstance.patch_apply(patches, fullTextNorm);
-            if (!results.includes(false)) {
-                newFullText = patchedText;
-                found = true;
+        dmpInstance.Match_Threshold = 0.4;
+        dmpInstance.Match_Distance = 2000;
+        dmpInstance.Patch_DeleteThreshold = 0.4;
+        // 从光标位置附近开始搜索，提高多处相同文本时的命中准确率
+        const cursorPos = vscode.window.activeTextEditor?.selection.active;
+        const searchStart = (cursorPos && document.uri.fsPath === targetUri.fsPath)
+            ? document.offsetAt(cursorPos)
+            : 0;
+        const matchIdx = dmpInstance.match_main(fullTextNorm, original, searchStart);
+        if (matchIdx !== -1) {
+            newFullText = fullTextNorm.substring(0, matchIdx) + newText + fullTextNorm.substring(matchIdx + original.length);
+            found = true;
+        } else {
+            const patches = dmpInstance.patch_make(original, newText);
+            if (patches.length > 0) {
+                const [patchedText, results] = dmpInstance.patch_apply(patches, fullTextNorm);
+                if (!results.includes(false)) {
+                    newFullText = patchedText;
+                    found = true;
+                }
             }
         }
     }
@@ -236,10 +249,7 @@ export async function handleReplaceEdit(
 
     const toWrite = hasCRLF ? newFullText.replace(/\n/g, '\r\n') : newFullText;
 
-    // 备份
-    if (!provider.fileBackupMap.has(targetUri.fsPath)) {
-        provider.fileBackupMap.set(targetUri.fsPath, fullText);
-    }
+    provider.setBackup(targetUri.fsPath, fullText);
 
     const edit = new vscode.WorkspaceEdit();
     const fullRange = new vscode.Range(document.positionAt(0), document.positionAt(fullText.length));
@@ -321,9 +331,7 @@ export async function handleLineContainingEdit(
     }
 
     // 备份
-    if (!provider.fileBackupMap.has(targetUri.fsPath)) {
-        provider.fileBackupMap.set(targetUri.fsPath, fullText);
-    }
+    provider.setBackup(targetUri.fsPath, fullText);
 
     const line = lines[foundIndex];
     const startPos = new vscode.Position(foundIndex, 0);
@@ -362,37 +370,61 @@ export async function handleClassEdit(
     const fullText = document.getText();
     const language = document.languageId;
 
-    let classRegex: RegExp;
-    if (language === 'typescript' || language === 'javascript') {
-        classRegex = new RegExp(`(class\\s+${className}\\s*(?:extends\\s+[\\w.]+\\s*)?(?:implements\\s+[\\w.,\\s]+\\s*)?{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, 'g');
-    } else if (language === 'java') {
-        classRegex = new RegExp(`(class\\s+${className}\\s*(?:extends\\s+[\\w.]+\\s*)?(?:implements\\s+[\\w.,\\s]+\\s*)?{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, 'g');
-    } else if (language === 'python') {
-        classRegex = new RegExp(`(class\\s+${className}\\s*(?:\\([^)]*\\))?\\s*:[\\s\\S]*?)(?=\\n\\S|$)`, 'g');
-    } else {
-        provider.postMessageToWebview({ type: 'addErrorResponse', text: `不支持的语言: ${language}` });
-        return;
+    let range: vscode.Range | undefined;
+
+    // 优先用 AST 定位
+    const classAnalyzer = globalASTRegistry.getAnalyzer(targetUri.fsPath);
+    if (classAnalyzer) {
+        try {
+            const astResult = await classAnalyzer.analyze(fullText, targetUri.fsPath);
+            const findNode = (nodes: any[]): any => {
+                for (const n of nodes) {
+                    if (n.type === 'class' && n.name === className) { return n; }
+                    const found = findNode(n.children || []);
+                    if (found) { return found; }
+                }
+                return null;
+            };
+            const node = findNode(astResult.nodes);
+            if (node) {
+                const startPos = new vscode.Position(node.startLine - 1, node.startColumn);
+                const endPos = new vscode.Position(node.endLine - 1, document.lineAt(node.endLine - 1).text.length);
+                range = new vscode.Range(startPos, endPos);
+            }
+        } catch { /* fallback to regex */ }
     }
 
-    const match = classRegex.exec(fullText);
-    if (!match) {
-        provider.postMessageToWebview({ type: 'addWarningResponse', text: `未找到类: ${className}` });
-        return;
+    // AST 未找到时降级为正则
+    if (!range) {
+        const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        let classRegex: RegExp;
+        if (language === 'typescript' || language === 'javascript') {
+            classRegex = new RegExp(`(class\\s+${escapedClassName}\\s*(?:extends\\s+[\\w.]+\\s*)?(?:implements\\s+[\\w.,\\s]+\\s*)?{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, 'g');
+        } else if (language === 'java') {
+            classRegex = new RegExp(`(class\\s+${escapedClassName}\\s*(?:extends\\s+[\\w.]+\\s*)?(?:implements\\s+[\\w.,\\s]+\\s*)?{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, 'g');
+        } else if (language === 'python') {
+            classRegex = new RegExp(`(class\\s+${escapedClassName}\\s*(?:\\([^)]*\\))?\\s*:[\\s\\S]*?)(?=\\n\\S|$)`, 'g');
+        } else {
+            provider.postMessageToWebview({ type: 'addErrorResponse', text: `不支持的语言: ${language}` });
+            return;
+        }
+        const match = classRegex.exec(fullText);
+        if (!match) {
+            provider.postMessageToWebview({ type: 'addWarningResponse', text: `未找到类: ${className}` });
+            return;
+        }
+        const originalClass = match[1];
+        range = new vscode.Range(document.positionAt(match.index), document.positionAt(match.index + originalClass.length));
     }
 
-    const originalClass = match[1];
-    const startPos = document.positionAt(match.index);
-    const endPos = document.positionAt(match.index + originalClass.length);
-    const range = new vscode.Range(startPos, endPos);
-
-    if (!provider.fileBackupMap.has(targetUri.fsPath)) {
-        provider.fileBackupMap.set(targetUri.fsPath, fullText);
-    }
+    provider.setBackup(targetUri.fsPath, fullText);
 
     const edit = new vscode.WorkspaceEdit();
     edit.replace(targetUri, range, newContent);
 
-    const newFullText = fullText.substring(0, match.index) + newContent + fullText.substring(match.index + originalClass.length);
+    const rangeStart = document.offsetAt(range.start);
+    const rangeEnd = document.offsetAt(range.end);
+    const newFullText = fullText.substring(0, rangeStart) + newContent + fullText.substring(rangeEnd);
     await confirmAndApplyDocEdit(
         provider, targetUri, filepath, document,
         fullText, newFullText, edit, 'class', history,
@@ -424,51 +456,71 @@ export async function handleFunctionEdit(
     const fullText = document.getText();
     const language = document.languageId;
 
-    const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    let funcRegex: RegExp;
-    if (language === 'typescript' || language === 'javascript') {
-        // 支持: function/async function/export function, const x = fn/arrow, 方法名
-        funcRegex = new RegExp(
-            `((?:export\\s+)?(?:async\\s+)?function\\s+${escapedName}\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)|` +
-            `(const\\s+${escapedName}\\s*=\\s*(?:async\\s+)?\\([^)]*\\)\\s*=>\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)|` +
-            `(const\\s+${escapedName}\\s*=\\s*function\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)`,
-            'g'
-        );
-    } else if (language === 'python') {
-        funcRegex = new RegExp(`(def\\s+${escapedName}\\s*\\([^)]*\\)\\s*:[\\s\\S]*?)(?=\\n(?:\\s{0,4}\\S|\\s*$)|$)`, 'g');
-    } else if (language === 'java' || language === 'c' || language === 'cpp') {
-        funcRegex = new RegExp(`((?:(?:public|private|protected|static|virtual|inline|async)\\s+)*[\\w<>\\[\\]\\*\\s]+\\s+${escapedName}\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, 'g');
-    } else {
-        provider.postMessageToWebview({ type: 'addErrorResponse', text: `不支持的语言: ${language}` });
-        return;
+    let range: vscode.Range | undefined;
+
+    // 优先用 AST 定位（更准确，支持嵌套括号/默认参数）
+    const analyzer = globalASTRegistry.getAnalyzer(targetUri.fsPath);
+    if (analyzer) {
+        try {
+            const astResult = await analyzer.analyze(fullText, targetUri.fsPath);
+            const findNode = (nodes: any[]): any => {
+                for (const n of nodes) {
+                    if ((n.type === 'function' || n.type === 'method') && n.name === functionName) { return n; }
+                    const found = findNode(n.children || []);
+                    if (found) { return found; }
+                }
+                return null;
+            };
+            const node = findNode(astResult.nodes);
+            if (node) {
+                const startPos = new vscode.Position(node.startLine - 1, node.startColumn);
+                const endPos = new vscode.Position(node.endLine - 1, document.lineAt(node.endLine - 1).text.length);
+                range = new vscode.Range(startPos, endPos);
+            }
+        } catch { /* fallback to regex */ }
     }
 
-    const match = funcRegex.exec(fullText);
-    if (!match) {
-        provider.postMessageToWebview({ type: 'addWarningResponse', text: `未找到函数: ${functionName}` });
-        return;
+    // AST 未找到时降级为正则
+    if (!range) {
+        const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        let funcRegex: RegExp;
+        if (language === 'typescript' || language === 'javascript') {
+            funcRegex = new RegExp(
+                `((?:export\\s+)?(?:async\\s+)?function\\s+${escapedName}\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)|` +
+                `(const\\s+${escapedName}\\s*=\\s*(?:async\\s+)?\\([^)]*\\)\\s*=>\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)|` +
+                `(const\\s+${escapedName}\\s*=\\s*function\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)`,
+                'g'
+            );
+        } else if (language === 'python') {
+            funcRegex = new RegExp(`(def\\s+${escapedName}\\s*\\([^)]*\\)\\s*:[\\s\\S]*?)(?=\\n(?:\\s{0,4}\\S|\\s*$)|$)`, 'g');
+        } else if (language === 'java' || language === 'c' || language === 'cpp') {
+            funcRegex = new RegExp(`((?:(?:public|private|protected|static|virtual|inline|async)\\s+)*[\\w<>\\[\\]\\*\\s]+\\s+${escapedName}\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, 'g');
+        } else {
+            provider.postMessageToWebview({ type: 'addErrorResponse', text: `不支持的语言: ${language}` });
+            return;
+        }
+        const match = funcRegex.exec(fullText);
+        if (!match) {
+            provider.postMessageToWebview({ type: 'addWarningResponse', text: `未找到函数: ${functionName}` });
+            return;
+        }
+        const originalFunc = match[1] || match[2] || match[3];
+        if (!originalFunc) {
+            provider.postMessageToWebview({ type: 'addWarningResponse', text: `无法定位函数定义: ${functionName}` });
+            return;
+        }
+        range = new vscode.Range(document.positionAt(match.index), document.positionAt(match.index + originalFunc.length));
     }
-
-    // 提取第一个捕获组（即整个函数定义）
-    const originalFunc = match[1] || match[2] || match[3]; // 兼容多种模式
-    if (!originalFunc) {
-        provider.postMessageToWebview({ type: 'addWarningResponse', text: `无法定位函数定义: ${functionName}` });
-        return;
-    }
-
-    const startPos = document.positionAt(match.index);
-    const endPos = document.positionAt(match.index + originalFunc.length);
-    const range = new vscode.Range(startPos, endPos);
 
     // 备份
-    if (!provider.fileBackupMap.has(targetUri.fsPath)) {
-        provider.fileBackupMap.set(targetUri.fsPath, fullText);
-    }
+    provider.setBackup(targetUri.fsPath, fullText);
 
     const edit = new vscode.WorkspaceEdit();
     edit.replace(targetUri, range, newContent);
 
-    const newFullText = fullText.substring(0, match.index) + newContent + fullText.substring(match.index + originalFunc.length);
+    const rangeStart = document.offsetAt(range.start);
+    const rangeEnd = document.offsetAt(range.end);
+    const newFullText = fullText.substring(0, rangeStart) + newContent + fullText.substring(rangeEnd);
     await confirmAndApplyDocEdit(
         provider, targetUri, filepath, document,
         fullText, newFullText, edit, 'function', history,
@@ -1016,9 +1068,7 @@ async function applyRangeEdit(
   const fullText = document.getText();
 
   // 备份（仅当文件存在且未备份）
-  if (fileExists && !provider.fileBackupMap.has(targetUri.fsPath)) {
-    provider.fileBackupMap.set(targetUri.fsPath, fullText);
-  }
+  if (fileExists) { provider.setBackup(targetUri.fsPath, fullText); }
 
   const edit = new vscode.WorkspaceEdit();
   edit.replace(targetUri, range, newContent);
@@ -1172,9 +1222,7 @@ export async function handleDiff(
   }
 
   // 备份
-  if (fileExists && !provider.fileBackupMap.has(targetUri.fsPath)) {
-    provider.fileBackupMap.set(targetUri.fsPath, oldContent);
-  }
+  if (fileExists) { provider.setBackup(targetUri.fsPath, oldContent); }
 
   const doc = await vscode.workspace.openTextDocument(targetUri);
   const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
@@ -1371,9 +1419,7 @@ if (requireConfirm) {
         await vscode.workspace.applyEdit(workspaceEdit);
         // 成功，将备份存入全局备份映射（便于后续回滚），并显示 diff 对比
         for (const [fsPath, old] of backupMap) {
-            if (!provider.fileBackupMap.has(fsPath)) {
-                provider.fileBackupMap.set(fsPath, old);
-            }
+            provider.setBackup(fsPath, old);
             // 显示 diff 对比
             if (old !== null && old !== undefined) {
                 const targetUri = vscode.Uri.file(fsPath);

@@ -110,13 +110,38 @@ export class SmartEditor {
         originalContent: string,
         newContent: string
     ): Promise<SmartEditResult> {
-        const similarity = this.calculateSimilarity(originalContent, newContent);
-        
+        // 只跑一次 diff_main，复用结果同时计算相似度和 hunks
+        const hunks = this.computeDiffHunks(originalContent, newContent);
+        const similarity = this.calculateSimilarityFromHunks(originalContent, newContent, hunks);
+
         if (similarity >= 0.5) {
-            return await this.applyPartialEdit(document, originalContent, newContent);
+            if (hunks.length === 0) {
+                return {
+                    success: true,
+                    editType: 'full',
+                    changesCount: 0,
+                    message: '文件内容无变化',
+                    originalContent,
+                    newContent
+                };
+            }
+            if (hunks.length > this.MAX_DIFF_HUNKS) {
+                return await this.applyFullReplace(document, newContent);
+            }
+            return await this.applyPartialEdits(document, hunks, originalContent, newContent);
         }
-        
+
         return await this.applyFullReplace(document, newContent);
+    }
+
+    // 从已有 hunks 推导相似度，避免重复跑 diff_main
+    static calculateSimilarityFromHunks(oldContent: string, newContent: string, hunks: DiffHunk[]): number {
+        if (oldContent === newContent) { return 1; }
+        if (!oldContent || !newContent) { return 0; }
+        const maxLength = Math.max(oldContent.length, newContent.length);
+        if (maxLength === 0) { return 0; }
+        const changedLength = hunks.reduce((sum, h) => sum + Math.max(h.oldContent.length, h.newContent.length), 0);
+        return Math.max(0, 1 - changedLength / maxLength);
     }
 
     private static async applyPartialEdit(

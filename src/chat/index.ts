@@ -58,6 +58,17 @@ export class LLMAChatProvider implements vscode.WebviewViewProvider {
    * 公开属性，以便 tools 模块访问
    */
   public fileBackupMap = new Map<string, string | null>();
+  private static readonly BACKUP_MAP_MAX = 50;
+
+  // LRU 备份：超出上限时删除最旧的条目
+  public setBackup(fsPath: string, content: string | null): void {
+    if (this.fileBackupMap.has(fsPath)) { return; } // 只保留第一次备份
+    if (this.fileBackupMap.size >= LLMAChatProvider.BACKUP_MAP_MAX) {
+      const oldestKey = this.fileBackupMap.keys().next().value;
+      if (oldestKey !== undefined) { this.fileBackupMap.delete(oldestKey); }
+    }
+    this.fileBackupMap.set(fsPath, content);
+  }
   
   /**
    * 待确认操作映射

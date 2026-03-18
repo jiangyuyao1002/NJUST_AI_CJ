@@ -44228,11 +44228,40 @@ var SmartEditor = class {
     }
   }
   static async applyAutoEdit(document2, originalContent, newContent) {
-    const similarity = this.calculateSimilarity(originalContent, newContent);
+    const hunks = this.computeDiffHunks(originalContent, newContent);
+    const similarity = this.calculateSimilarityFromHunks(originalContent, newContent, hunks);
     if (similarity >= 0.5) {
-      return await this.applyPartialEdit(document2, originalContent, newContent);
+      if (hunks.length === 0) {
+        return {
+          success: true,
+          editType: "full",
+          changesCount: 0,
+          message: "\u6587\u4EF6\u5185\u5BB9\u65E0\u53D8\u5316",
+          originalContent,
+          newContent
+        };
+      }
+      if (hunks.length > this.MAX_DIFF_HUNKS) {
+        return await this.applyFullReplace(document2, newContent);
+      }
+      return await this.applyPartialEdits(document2, hunks, originalContent, newContent);
     }
     return await this.applyFullReplace(document2, newContent);
+  }
+  // 从已有 hunks 推导相似度，避免重复跑 diff_main
+  static calculateSimilarityFromHunks(oldContent, newContent, hunks) {
+    if (oldContent === newContent) {
+      return 1;
+    }
+    if (!oldContent || !newContent) {
+      return 0;
+    }
+    const maxLength = Math.max(oldContent.length, newContent.length);
+    if (maxLength === 0) {
+      return 0;
+    }
+    const changedLength = hunks.reduce((sum, h) => sum + Math.max(h.oldContent.length, h.newContent.length), 0);
+    return Math.max(0, 1 - changedLength / maxLength);
   }
   static async applyPartialEdit(document2, originalContent, newContent) {
     const hunks = this.computeDiffHunks(originalContent, newContent);
@@ -44875,14 +44904,23 @@ async function handleReplaceEdit(provider, filepath, original, newText, history,
   }
   if (!found) {
     const dmpInstance = new dmp.diff_match_patch();
-    dmpInstance.Match_Threshold = 0.6;
-    dmpInstance.Patch_DeleteThreshold = 0.6;
-    const patches = dmpInstance.patch_make(original, newText);
-    if (patches.length > 0) {
-      const [patchedText, results] = dmpInstance.patch_apply(patches, fullTextNorm);
-      if (!results.includes(false)) {
-        newFullText = patchedText;
-        found = true;
+    dmpInstance.Match_Threshold = 0.4;
+    dmpInstance.Match_Distance = 2e3;
+    dmpInstance.Patch_DeleteThreshold = 0.4;
+    const cursorPos = vscode11.window.activeTextEditor?.selection.active;
+    const searchStart = cursorPos && document2.uri.fsPath === targetUri.fsPath ? document2.offsetAt(cursorPos) : 0;
+    const matchIdx = dmpInstance.match_main(fullTextNorm, original, searchStart);
+    if (matchIdx !== -1) {
+      newFullText = fullTextNorm.substring(0, matchIdx) + newText + fullTextNorm.substring(matchIdx + original.length);
+      found = true;
+    } else {
+      const patches = dmpInstance.patch_make(original, newText);
+      if (patches.length > 0) {
+        const [patchedText, results] = dmpInstance.patch_apply(patches, fullTextNorm);
+        if (!results.includes(false)) {
+          newFullText = patchedText;
+          found = true;
+        }
       }
     }
   }
@@ -44892,9 +44930,7 @@ async function handleReplaceEdit(provider, filepath, original, newText, history,
     return;
   }
   const toWrite = hasCRLF ? newFullText.replace(/\n/g, "\r\n") : newFullText;
-  if (!provider.fileBackupMap.has(targetUri.fsPath)) {
-    provider.fileBackupMap.set(targetUri.fsPath, fullText);
-  }
+  provider.setBackup(targetUri.fsPath, fullText);
   const edit = new vscode11.WorkspaceEdit();
   const fullRange = new vscode11.Range(document2.positionAt(0), document2.positionAt(fullText.length));
   edit.replace(targetUri, fullRange, toWrite);
@@ -44961,9 +44997,7 @@ async function handleLineContainingEdit(provider, filepath, textPattern, newLine
     provider.postMessageToWebview({ type: "addWarningResponse", text: `\u672A\u627E\u5230\u5305\u542B\u6587\u672C\u7684\u884C: ${textPattern}` });
     return;
   }
-  if (!provider.fileBackupMap.has(targetUri.fsPath)) {
-    provider.fileBackupMap.set(targetUri.fsPath, fullText);
-  }
+  provider.setBackup(targetUri.fsPath, fullText);
   const line = lines[foundIndex];
   const startPos = new vscode11.Position(foundIndex, 0);
   const endPos = new vscode11.Position(foundIndex, line.length);
@@ -44998,32 +45032,59 @@ async function handleClassEdit(provider, filepath, className, newContent, histor
   }
   const fullText = document2.getText();
   const language = document2.languageId;
-  let classRegex;
-  if (language === "typescript" || language === "javascript") {
-    classRegex = new RegExp(`(class\\s+${className}\\s*(?:extends\\s+[\\w.]+\\s*)?(?:implements\\s+[\\w.,\\s]+\\s*)?{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, "g");
-  } else if (language === "java") {
-    classRegex = new RegExp(`(class\\s+${className}\\s*(?:extends\\s+[\\w.]+\\s*)?(?:implements\\s+[\\w.,\\s]+\\s*)?{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, "g");
-  } else if (language === "python") {
-    classRegex = new RegExp(`(class\\s+${className}\\s*(?:\\([^)]*\\))?\\s*:[\\s\\S]*?)(?=\\n\\S|$)`, "g");
-  } else {
-    provider.postMessageToWebview({ type: "addErrorResponse", text: `\u4E0D\u652F\u6301\u7684\u8BED\u8A00: ${language}` });
-    return;
+  let range;
+  const classAnalyzer = globalASTRegistry.getAnalyzer(targetUri.fsPath);
+  if (classAnalyzer) {
+    try {
+      const astResult = await classAnalyzer.analyze(fullText, targetUri.fsPath);
+      const findNode = (nodes) => {
+        for (const n of nodes) {
+          if (n.type === "class" && n.name === className) {
+            return n;
+          }
+          const found = findNode(n.children || []);
+          if (found) {
+            return found;
+          }
+        }
+        return null;
+      };
+      const node = findNode(astResult.nodes);
+      if (node) {
+        const startPos = new vscode11.Position(node.startLine - 1, node.startColumn);
+        const endPos = new vscode11.Position(node.endLine - 1, document2.lineAt(node.endLine - 1).text.length);
+        range = new vscode11.Range(startPos, endPos);
+      }
+    } catch {
+    }
   }
-  const match = classRegex.exec(fullText);
-  if (!match) {
-    provider.postMessageToWebview({ type: "addWarningResponse", text: `\u672A\u627E\u5230\u7C7B: ${className}` });
-    return;
+  if (!range) {
+    const escapedClassName = className.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let classRegex;
+    if (language === "typescript" || language === "javascript") {
+      classRegex = new RegExp(`(class\\s+${escapedClassName}\\s*(?:extends\\s+[\\w.]+\\s*)?(?:implements\\s+[\\w.,\\s]+\\s*)?{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, "g");
+    } else if (language === "java") {
+      classRegex = new RegExp(`(class\\s+${escapedClassName}\\s*(?:extends\\s+[\\w.]+\\s*)?(?:implements\\s+[\\w.,\\s]+\\s*)?{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, "g");
+    } else if (language === "python") {
+      classRegex = new RegExp(`(class\\s+${escapedClassName}\\s*(?:\\([^)]*\\))?\\s*:[\\s\\S]*?)(?=\\n\\S|$)`, "g");
+    } else {
+      provider.postMessageToWebview({ type: "addErrorResponse", text: `\u4E0D\u652F\u6301\u7684\u8BED\u8A00: ${language}` });
+      return;
+    }
+    const match = classRegex.exec(fullText);
+    if (!match) {
+      provider.postMessageToWebview({ type: "addWarningResponse", text: `\u672A\u627E\u5230\u7C7B: ${className}` });
+      return;
+    }
+    const originalClass = match[1];
+    range = new vscode11.Range(document2.positionAt(match.index), document2.positionAt(match.index + originalClass.length));
   }
-  const originalClass = match[1];
-  const startPos = document2.positionAt(match.index);
-  const endPos = document2.positionAt(match.index + originalClass.length);
-  const range = new vscode11.Range(startPos, endPos);
-  if (!provider.fileBackupMap.has(targetUri.fsPath)) {
-    provider.fileBackupMap.set(targetUri.fsPath, fullText);
-  }
+  provider.setBackup(targetUri.fsPath, fullText);
   const edit = new vscode11.WorkspaceEdit();
   edit.replace(targetUri, range, newContent);
-  const newFullText = fullText.substring(0, match.index) + newContent + fullText.substring(match.index + originalClass.length);
+  const rangeStart = document2.offsetAt(range.start);
+  const rangeEnd = document2.offsetAt(range.end);
+  const newFullText = fullText.substring(0, rangeStart) + newContent + fullText.substring(rangeEnd);
   await confirmAndApplyDocEdit(
     provider,
     targetUri,
@@ -45052,40 +45113,66 @@ async function handleFunctionEdit(provider, filepath, functionName, newContent, 
   }
   const fullText = document2.getText();
   const language = document2.languageId;
-  const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  let funcRegex;
-  if (language === "typescript" || language === "javascript") {
-    funcRegex = new RegExp(
-      `((?:export\\s+)?(?:async\\s+)?function\\s+${escapedName}\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)|(const\\s+${escapedName}\\s*=\\s*(?:async\\s+)?\\([^)]*\\)\\s*=>\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)|(const\\s+${escapedName}\\s*=\\s*function\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)`,
-      "g"
-    );
-  } else if (language === "python") {
-    funcRegex = new RegExp(`(def\\s+${escapedName}\\s*\\([^)]*\\)\\s*:[\\s\\S]*?)(?=\\n(?:\\s{0,4}\\S|\\s*$)|$)`, "g");
-  } else if (language === "java" || language === "c" || language === "cpp") {
-    funcRegex = new RegExp(`((?:(?:public|private|protected|static|virtual|inline|async)\\s+)*[\\w<>\\[\\]\\*\\s]+\\s+${escapedName}\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, "g");
-  } else {
-    provider.postMessageToWebview({ type: "addErrorResponse", text: `\u4E0D\u652F\u6301\u7684\u8BED\u8A00: ${language}` });
-    return;
+  let range;
+  const analyzer = globalASTRegistry.getAnalyzer(targetUri.fsPath);
+  if (analyzer) {
+    try {
+      const astResult = await analyzer.analyze(fullText, targetUri.fsPath);
+      const findNode = (nodes) => {
+        for (const n of nodes) {
+          if ((n.type === "function" || n.type === "method") && n.name === functionName) {
+            return n;
+          }
+          const found = findNode(n.children || []);
+          if (found) {
+            return found;
+          }
+        }
+        return null;
+      };
+      const node = findNode(astResult.nodes);
+      if (node) {
+        const startPos = new vscode11.Position(node.startLine - 1, node.startColumn);
+        const endPos = new vscode11.Position(node.endLine - 1, document2.lineAt(node.endLine - 1).text.length);
+        range = new vscode11.Range(startPos, endPos);
+      }
+    } catch {
+    }
   }
-  const match = funcRegex.exec(fullText);
-  if (!match) {
-    provider.postMessageToWebview({ type: "addWarningResponse", text: `\u672A\u627E\u5230\u51FD\u6570: ${functionName}` });
-    return;
+  if (!range) {
+    const escapedName = functionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    let funcRegex;
+    if (language === "typescript" || language === "javascript") {
+      funcRegex = new RegExp(
+        `((?:export\\s+)?(?:async\\s+)?function\\s+${escapedName}\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)|(const\\s+${escapedName}\\s*=\\s*(?:async\\s+)?\\([^)]*\\)\\s*=>\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)|(const\\s+${escapedName}\\s*=\\s*function\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)`,
+        "g"
+      );
+    } else if (language === "python") {
+      funcRegex = new RegExp(`(def\\s+${escapedName}\\s*\\([^)]*\\)\\s*:[\\s\\S]*?)(?=\\n(?:\\s{0,4}\\S|\\s*$)|$)`, "g");
+    } else if (language === "java" || language === "c" || language === "cpp") {
+      funcRegex = new RegExp(`((?:(?:public|private|protected|static|virtual|inline|async)\\s+)*[\\w<>\\[\\]\\*\\s]+\\s+${escapedName}\\s*\\([^)]*\\)\\s*{[\\s\\S]*?})\\s*(?=\\n\\S|$)`, "g");
+    } else {
+      provider.postMessageToWebview({ type: "addErrorResponse", text: `\u4E0D\u652F\u6301\u7684\u8BED\u8A00: ${language}` });
+      return;
+    }
+    const match = funcRegex.exec(fullText);
+    if (!match) {
+      provider.postMessageToWebview({ type: "addWarningResponse", text: `\u672A\u627E\u5230\u51FD\u6570: ${functionName}` });
+      return;
+    }
+    const originalFunc = match[1] || match[2] || match[3];
+    if (!originalFunc) {
+      provider.postMessageToWebview({ type: "addWarningResponse", text: `\u65E0\u6CD5\u5B9A\u4F4D\u51FD\u6570\u5B9A\u4E49: ${functionName}` });
+      return;
+    }
+    range = new vscode11.Range(document2.positionAt(match.index), document2.positionAt(match.index + originalFunc.length));
   }
-  const originalFunc = match[1] || match[2] || match[3];
-  if (!originalFunc) {
-    provider.postMessageToWebview({ type: "addWarningResponse", text: `\u65E0\u6CD5\u5B9A\u4F4D\u51FD\u6570\u5B9A\u4E49: ${functionName}` });
-    return;
-  }
-  const startPos = document2.positionAt(match.index);
-  const endPos = document2.positionAt(match.index + originalFunc.length);
-  const range = new vscode11.Range(startPos, endPos);
-  if (!provider.fileBackupMap.has(targetUri.fsPath)) {
-    provider.fileBackupMap.set(targetUri.fsPath, fullText);
-  }
+  provider.setBackup(targetUri.fsPath, fullText);
   const edit = new vscode11.WorkspaceEdit();
   edit.replace(targetUri, range, newContent);
-  const newFullText = fullText.substring(0, match.index) + newContent + fullText.substring(match.index + originalFunc.length);
+  const rangeStart = document2.offsetAt(range.start);
+  const rangeEnd = document2.offsetAt(range.end);
+  const newFullText = fullText.substring(0, rangeStart) + newContent + fullText.substring(rangeEnd);
   await confirmAndApplyDocEdit(
     provider,
     targetUri,
@@ -45523,8 +45610,8 @@ async function applyRangeEdit(provider, filepath, range, newContent, history, si
     document2 = await vscode11.workspace.openTextDocument(targetUri);
   }
   const fullText = document2.getText();
-  if (fileExists && !provider.fileBackupMap.has(targetUri.fsPath)) {
-    provider.fileBackupMap.set(targetUri.fsPath, fullText);
+  if (fileExists) {
+    provider.setBackup(targetUri.fsPath, fullText);
   }
   const edit = new vscode11.WorkspaceEdit();
   edit.replace(targetUri, range, newContent);
@@ -45632,8 +45719,8 @@ async function handleDiff(provider, filepath, diffContent, history, signal) {
     edit2.createFile(targetUri, { ignoreIfExists: true });
     await vscode11.workspace.applyEdit(edit2);
   }
-  if (fileExists && !provider.fileBackupMap.has(targetUri.fsPath)) {
-    provider.fileBackupMap.set(targetUri.fsPath, oldContent);
+  if (fileExists) {
+    provider.setBackup(targetUri.fsPath, oldContent);
   }
   const doc = await vscode11.workspace.openTextDocument(targetUri);
   const fullRange = new vscode11.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
@@ -45798,9 +45885,7 @@ async function handleApplyBatch(provider, files, history, signal) {
   try {
     await vscode11.workspace.applyEdit(workspaceEdit);
     for (const [fsPath, old] of backupMap) {
-      if (!provider.fileBackupMap.has(fsPath)) {
-        provider.fileBackupMap.set(fsPath, old);
-      }
+      provider.setBackup(fsPath, old);
       if (old !== null && old !== void 0) {
         const targetUri = vscode11.Uri.file(fsPath);
         const ext = path12.extname(fsPath);
@@ -49441,7 +49526,7 @@ async function getPythonRunCommand(filePath) {
 }
 
 // src/chat/index.ts
-var LLMAChatProvider = class {
+var LLMAChatProvider = class _LLMAChatProvider {
   /**
    * 构造函数
    * 
@@ -49493,6 +49578,22 @@ var LLMAChatProvider = class {
     this.isProcessingTools = false;
     this._logFilePath = this._getLogFilePath();
     this.sessionManager = new ChatSessionManager(_context);
+  }
+  static {
+    this.BACKUP_MAP_MAX = 50;
+  }
+  // LRU 备份：超出上限时删除最旧的条目
+  setBackup(fsPath, content) {
+    if (this.fileBackupMap.has(fsPath)) {
+      return;
+    }
+    if (this.fileBackupMap.size >= _LLMAChatProvider.BACKUP_MAP_MAX) {
+      const oldestKey = this.fileBackupMap.keys().next().value;
+      if (oldestKey !== void 0) {
+        this.fileBackupMap.delete(oldestKey);
+      }
+    }
+    this.fileBackupMap.set(fsPath, content);
   }
   _getLogFilePath() {
     const workspaceFolders = vscode18.workspace.workspaceFolders;

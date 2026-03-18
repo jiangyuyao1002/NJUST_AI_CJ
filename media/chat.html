@@ -1231,6 +1231,16 @@ textarea {
     .modal-content {
       background: var(--vscode-editor-background); border-radius: var(--radius-lg);
       width: 90%; max-width: 500px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow-md);
+      scrollbar-width: thin;
+      scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
+    }
+    .modal-content::-webkit-scrollbar { width: 5px; }
+    .modal-content::-webkit-scrollbar-track { background: transparent; }
+    .modal-content::-webkit-scrollbar-thumb {
+      background: var(--vscode-scrollbarSlider-background); border-radius: 3px;
+    }
+    .modal-content::-webkit-scrollbar-thumb:hover {
+      background: var(--vscode-scrollbarSlider-hoverBackground);
     }
     
     .modal-header {
