@@ -557,7 +557,7 @@ end: 200
 
 ### 项目结构
 
-```
+```text
 src/
 ├── api.ts                 # AI API 调用核心
 ├── extension.ts           # 扩展入口
